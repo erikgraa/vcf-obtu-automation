@@ -1,0 +1,107 @@
+---
+- name: Download bundles for VMware Cloud Foundation offline depot
+  become: false
+  hosts: localhost
+  gather_facts: false
+  vars_files:
+    - vault.yml
+  vars:
+    obtu_archive: 'lcm-tools-prod.tar.gz'
+    obtu_archive_path: 'lcm-tools-prod'
+    obtu_command_path: 'lcm-tools-prod/bin/lcm-bundle-transfer-util'
+    obtu_command_bundles_download: >
+      {{ obtu_command }} --setUpOfflineDepot --offlineDepotRootDir '{{ obtu_depot_path }}' --offlineDepotUrl '{{ obtu_depot_url }}' -depotUser '{{ broadcom_username }}' -depotUserPasswordFile '{{ pwd.stdout }}/{{ obtu_password_file }}' --sv '{{ obtu_source_version }}'
+    obtu_command_cleanup_bundles: >
+      {{ obtu_command }} --cleanUpOfflineDepot --sv '{{ obtu_source_version }}' --offlineDepotRootDir '{{ obtu_depot_path }}'
+    obtu_cleanup_always: false
+    obtu_depot_path: '/srv/www'
+    obtu_depot_url: 'https://depot:1337'
+    obtu_download_ariaBundles: false
+    obtu_download_asyncPatches: false
+    obtu_imageType: 'ALL'
+    obtu_password_file: 'password.file'
+    obtu_source_version: '5.1.1.0'
+  tasks:
+   - name: Download bundles for VMware Cloud Foundation offline depot
+     block:
+      - name: Register playbook path
+        shell: pwd
+        register: pwd
+
+      - name: Construct download command path
+        set_fact: obtu_command='{{ pwd.stdout }}/{{ obtu_command_path }}'
+
+      - name: Construct download command
+        set_fact: obtu_command_download='{{ obtu_command_bundles_download }}'
+
+      - name: Append Async Patches to cleanup command
+        set_fact: obtu_command_cleanup_bundles='{{ obtu_command_cleanup_bundles }} --asyncPatches'
+        when: obtu_download_asyncPatches == true
+
+      - name: Append Skip Aria bundles to download command
+        set_fact: obtu_command_download='{{ obtu_command_download }} --skipAriaBundles'
+        when: obtu_download_ariaBundles == false
+        tags:
+        - ariaBundles
+
+      - name: Append Async patches to download command
+        set_fact: obtu_command_download='{{ obtu_command_download }} --asyncPatches'
+        when: obtu_download_asyncPatches == true
+
+      - name: Append image type to download command
+        set_fact: obtu_command_download='{{ obtu_command_download }} --imageType {{ obtu_imageType }}'
+        when: obtu_imageType == 'INSTALL' or obtu_imageType == 'PATCH'
+
+      - name: Check that the OBTU archive exists
+        stat:
+          path: '{{ pwd.stdout }}/{{ obtu_archive }}'
+        register: obtu_file_result
+
+      - name: Fail if the OBTU archive does not exist
+        fail: msg='Download the OBTU archive and place it in the repository root'
+        when: obtu_file_result.stat.exists == False
+
+      - name: Create OBTU directory
+        ansible.builtin.file:
+          path: '{{ pwd.stdout }}/{{ obtu_archive_path }}'
+          state: directory
+          mode: '0755'
+
+      - name: Unarchive OBTU
+        ansible.builtin.unarchive:
+          src: '{{ pwd.stdout }}/lcm-tools-prod.tar.gz'
+          dest: '{{ pwd.stdout }}/{{ obtu_archive_path }}'
+
+      - name: Make OBTU executable
+        ansible.builtin.file:
+          path: '{{ pwd.stdout }}/{{ obtu_command_path }}'
+          state: file
+          mode: '0750'
+
+      - name: Create temporary password file
+        ansible.builtin.lineinfile:
+          path: '{{ pwd.stdout }}/{{ obtu_password_file }}'
+          line: '{{ broadcom_password }}'
+          create: yes     
+          mode: 0640
+
+      - name: Create offline depot directory if it does not exist
+        ansible.builtin.file:
+          path: '{{ obtu_depot_path }}'
+          state: directory
+          mode: '0755'
+
+      - name: Cleanup bundles for offline depot before download
+        ansible.builtin.command:
+          cmd: '{{ obtu_command_cleanup_bundles }}'
+        when: obtu_cleanup_always == true
+
+      - name: Download bundles for offline depot
+        ansible.builtin.command:
+          cmd: "{{ obtu_command_download }}"
+        no_log: true
+
+      - name: Remove temporary password file
+        ansible.builtin.file:
+          path: '{{ pwd.stdout }}/{{ obtu_password_file }}'
+          state: absent
